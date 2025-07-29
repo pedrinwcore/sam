@@ -20,6 +20,17 @@ export default defineConfig({
         secure: false,
         timeout: 30000,
         followRedirects: true,
+        configure: (proxy, _options) => {
+          proxy.on('error', (err, _req, _res) => {
+            console.log('Proxy error:', err);
+          });
+          proxy.on('proxyReq', (proxyReq, req, _res) => {
+            console.log('Proxying request:', req.method, req.url);
+          });
+          proxy.on('proxyRes', (proxyRes, req, _res) => {
+            console.log('Proxy response:', proxyRes.statusCode, req.url);
+          });
+        },
       },
       '/vod': {
         target: process.env.NODE_ENV === 'production' ? 'http://samhost.wcore.com.br' : 'http://localhost',

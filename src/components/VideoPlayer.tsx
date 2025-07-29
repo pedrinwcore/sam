@@ -59,43 +59,8 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({ playlistVideo, onVideoEnd }) 
       return url;
     }
     
-    // Construir URL correta para VOD no Wowza
-    const isProduction = window.location.hostname === 'samhost.wcore.com.br';
-    const wowzaHost = isProduction ? 'samhost.wcore.com.br' : '51.222.156.223';
-    
-    // Se a URL já contém vod/_definst_, usar como está
-    if (url.includes('vod/_definst_')) {
-      return url.replace('51.222.156.223', wowzaHost);
-    }
-    
-    // Construir URL VOD correta
-    let videoUrl;
-    if (url.includes('playlist.m3u8')) {
-      // Para HLS, usar diretamente
-      videoUrl = url.replace('51.222.156.223', wowzaHost);
-    } else {
-      // Para outros formatos, construir URL VOD
-      const cleanPath = url.replace('/content', '').replace(/^\/+/, '');
-      const pathParts = cleanPath.split('/');
-      
-      if (pathParts.length >= 3) {
-        const userLogin = pathParts[0];
-        const folderName = pathParts[1];
-        const fileName = pathParts[2];
-        const fileExtension = fileName.split('.').pop().toLowerCase();
-        
-        if (fileExtension === 'mp4') {
-          videoUrl = `http://${wowzaHost}:1935/vod/_definst_/mp4:${userLogin}/${folderName}/${fileName}/playlist.m3u8`;
-        } else {
-          videoUrl = `http://${wowzaHost}:1935/vod/_definst_/${userLogin}/${folderName}/${fileName}/playlist.m3u8`;
-        }
-      } else {
-        videoUrl = `http://${wowzaHost}:1935/vod/_definst_/${cleanPath}/playlist.m3u8`;
-      }
-    }
-    
-    console.log('🎥 URL do vídeo construída:', videoUrl);
-    return videoUrl;
+    // Usar proxy do backend que já tem a lógica correta
+    return `/content${url}`;
   };
 
   const videoSrc = playlistVideo?.url ? getVideoUrl(playlistVideo.url) : 

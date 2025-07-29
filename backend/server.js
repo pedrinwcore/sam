@@ -44,8 +44,6 @@
   // Middleware personalizado para servir arquivos de vídeo
   app.use('/content', async (req, res, next) => {
     try {
-      const fetch = require('node-fetch');
-      
       // Extrair informações do caminho
       const requestPath = req.path;
       console.log(`📹 Solicitação de vídeo: ${requestPath}`);
@@ -74,75 +72,127 @@
       
       res.setHeader('Cache-Control', 'public, max-age=3600');
       
-      // Construir URL do Wowza baseada no ambiente
-      const isProduction = process.env.NODE_ENV === 'production';
-      const wowzaHost = isProduction ? 'samhost.wcore.com.br' : '51.222.156.223';
+      // Buscar servidor Wowza dinamicamente baseado no usuário
+      const pathParts = requestPath.split('/').filter(part => part);
+      let wowzaHost = '51.222.156.223'; // Servidor padrão
+      
+      if (pathParts.length >= 1) {
+        const userLogin = pathParts[0];
+        
+        try {
+          // Buscar servidor do usuário no banco
+          const [userRows] = await db.execute(
+            `SELECT ws.ip 
+             FROM streamings s 
+             JOIN wowza_servers ws ON s.codigo_servidor = ws.codigo 
+             WHERE s.login = ? OR s.identificacao = ? 
+             LIMIT 1`,
+            [userLogin, userLogin]
+          );
+          
+          if (userRows.length > 0) {
+            wowzaHost = userRows[0].ip;
+            console.log(`🎯 Servidor específico encontrado para ${userLogin}: ${wowzaHost}`);
+          }
+        } catch (dbError) {
+          console.warn('⚠️ Erro ao buscar servidor do usuário, usando padrão:', dbError.message);
+        }
+      }
       
       // Construir URL correta para VOD
       let wowzaUrl;
-      if (requestPath.includes('playlist.m3u8') || requestPath.includes('.ts')) {
-        // Para HLS, usar aplicação VOD
-        wowzaUrl = `http://${wowzaHost}:1935/vod/_definst_${requestPath}`;
+      
+      // Detectar se é um arquivo MP4 e construir URL apropriada
+      if (requestPath.includes('.mp4') && !requestPath.includes('playlist.m3u8')) {
+        // Para arquivos MP4 diretos, usar formato mp4:
+        const cleanPath = requestPath.replace(/^\/+/, '');
+        wowzaUrl = `http://${wowzaHost}:1935/vod/_definst_/mp4:${cleanPath}`;
+      } else if (requestPath.includes('playlist.m3u8')) {
+        // Para playlists HLS, construir URL correta
+        const cleanPath = requestPath.replace('playlist.m3u8', '').replace(/^\/+/, '').replace(/\/+$/, '');
+        
+        // Verificar se o caminho contém um arquivo MP4
+        if (cleanPath.includes('.mp4')) {
+          const mp4Path = cleanPath.replace('.mp4', '');
+          wowzaUrl = `http://${wowzaHost}:1935/vod/_definst_/mp4:${mp4Path}.mp4/playlist.m3u8`;
+        } else {
+          wowzaUrl = `http://${wowzaHost}:1935/vod/_definst_/${cleanPath}/playlist.m3u8`;
+        }
       } else {
-        // Para arquivos diretos, usar aplicação VOD
+        // Para outros tipos de arquivo
         wowzaUrl = `http://${wowzaHost}:1935/vod/_definst_${requestPath}`;
       }
       
       console.log(`🔗 Redirecionando para: ${wowzaUrl}`);
       
-      // Fazer proxy da requisição para o servidor Wowza com autenticação
+      // Fazer proxy da requisição para o servidor Wowza
+      const fetch = require('node-fetch');
       const authHeader = Buffer.from('admin:FK38Ca2SuE6jvJXed97VMn').toString('base64');
       
-      try {
-        const wowzaResponse = await fetch(wowzaUrl, {
-          method: req.method,
-          headers: {
-            'Range': req.headers.range || '',
-            'User-Agent': 'Streaming-System/1.0',
-            'Authorization': `Basic ${authHeader}`
-          }
-        });
+      const wowzaResponse = await fetch(wowzaUrl, {
+        method: req.method,
+        headers: {
+          'Range': req.headers.range || '',
+          'User-Agent': 'Streaming-System/1.0',
+          'Authorization': `Basic ${authHeader}`,
+          'Accept': '*/*'
+        },
+        timeout: 30000
+      });
+      
+      if (!wowzaResponse.ok) {
+        console.log(`❌ Erro do Wowza (${wowzaResponse.status}): ${wowzaResponse.statusText}`);
         
-        if (!wowzaResponse.ok) {
-          console.log(`❌ Erro do Wowza: ${wowzaResponse.status}`);
+        // Tentar URLs alternativas
+        const alternativeUrls = [
+          `http://${wowzaHost}:1935/vod${requestPath}`,
+          `http://${wowzaHost}:1935/live${requestPath}`,
+          `http://${wowzaHost}:1935/samhost${requestPath}`
+        ];
+        
+        for (const altUrl of alternativeUrls) {
+          console.log(`🔄 Tentando URL alternativa: ${altUrl}`);
           
-          // Se falhar, tentar URL alternativa sem autenticação
-          const alternativeUrl = `http://${wowzaHost}:1935/vod${requestPath}`;
-          console.log(`🔄 Tentando URL alternativa: ${alternativeUrl}`);
-          
-          const altResponse = await fetch(alternativeUrl, {
-            method: req.method,
-            headers: {
-              'Range': req.headers.range || '',
-              'User-Agent': 'Streaming-System/1.0'
+          try {
+            const altResponse = await fetch(altUrl, {
+              method: req.method,
+              headers: {
+                'Range': req.headers.range || '',
+                'User-Agent': 'Streaming-System/1.0'
+              },
+              timeout: 10000
+            });
+            
+            if (altResponse.ok) {
+              console.log(`✅ URL alternativa funcionou: ${altUrl}`);
+              
+              // Copiar headers da resposta
+              altResponse.headers.forEach((value, key) => {
+                res.setHeader(key, value);
+              });
+              
+              altResponse.body.pipe(res);
+              return;
             }
-          });
-          
-          if (!altResponse.ok) {
-            return res.status(404).json({ error: 'Vídeo não disponível no servidor de streaming' });
+          } catch (altError) {
+            console.log(`❌ URL alternativa falhou: ${altUrl} - ${altError.message}`);
           }
-          
-          // Usar resposta alternativa
-          altResponse.headers.forEach((value, key) => {
-            res.setHeader(key, value);
-          });
-          
-          altResponse.body.pipe(res);
-          return;
         }
         
-        // Copiar headers da resposta do Wowza
-        wowzaResponse.headers.forEach((value, key) => {
-          res.setHeader(key, value);
+        return res.status(404).json({ 
+          error: 'Vídeo não encontrado no servidor de streaming',
+          details: `Tentativas falharam para: ${wowzaUrl}`,
+          suggestions: 'Verifique se o arquivo existe no servidor Wowza'
         });
-        
-        // Fazer pipe do stream
-        wowzaResponse.body.pipe(res);
-        
-      } catch (fetchError) {
-        console.error('❌ Erro ao acessar Wowza:', fetchError);
-        return res.status(500).json({ error: 'Erro interno do servidor de streaming' });
       }
+      
+      // Copiar headers da resposta do Wowza
+      wowzaResponse.headers.forEach((value, key) => {
+        res.setHeader(key, value);
+      });
+      
+      // Fazer pipe do stream
+      wowzaResponse.body.pipe(res);
       
     } catch (error) {
       console.error('❌ Erro no middleware de vídeo:', error);

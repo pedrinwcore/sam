@@ -316,23 +316,13 @@ class WowzaStreamingService {
 
     // Construir URL correta para vídeos VOD
     buildVideoUrl(userLogin, folderName, fileName) {
-        // Detectar extensão do arquivo
-        const fileExtension = fileName.split('.').pop().toLowerCase();
-        
-        // Construir caminho baseado no tipo de arquivo
-        let streamPath;
-        if (fileExtension === 'mp4') {
-            streamPath = `mp4:${userLogin}/${folderName}/${fileName}`;
-        } else if (['avi', 'mov', 'wmv'].includes(fileExtension)) {
-            streamPath = `${userLogin}/${folderName}/${fileName}`;
-        } else {
-            streamPath = `${userLogin}/${folderName}/${fileName}`;
-        }
+        // Retornar URLs que serão processadas pelo proxy do backend
+        const relativePath = `/${userLogin}/${folderName}/${fileName}`;
         
         return {
-            hlsUrl: `http://${this.wowzaHost}:1935/vod/_definst_/${streamPath}/playlist.m3u8`,
-            rtmpUrl: `rtmp://${this.wowzaHost}:1935/vod/_definst_/${streamPath}`,
-            directUrl: `http://${this.wowzaHost}:1935/vod/_definst_/${streamPath}/media.mp4`
+            hlsUrl: `/content${relativePath}`,
+            rtmpUrl: `rtmp://${this.wowzaHost}:1935/vod/_definst_/mp4:${userLogin}/${folderName}/${fileName}`,
+            directUrl: `/content${relativePath}`
         };
     }
 

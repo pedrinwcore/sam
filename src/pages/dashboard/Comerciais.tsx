@@ -247,37 +247,8 @@ const Comerciais: React.FC = () => {
   const getVideoUrl = (url: string) => {
     if (!url) return '';
     
-    if (url.startsWith('http')) {
-      return url;
-    }
-    
-    // Construir URL correta para VOD no Wowza
-    const isProduction = window.location.hostname === 'samhost.wcore.com.br';
-    const wowzaHost = isProduction ? 'samhost.wcore.com.br' : '51.222.156.223';
-    
-    // Se a URL já contém vod/_definst_, usar como está
-    if (url.includes('vod/_definst_')) {
-      return url.replace('51.222.156.223', wowzaHost);
-    }
-    
-    // Construir URL VOD correta
-    const cleanPath = url.replace('/content', '').replace(/^\/+/, '');
-    const pathParts = cleanPath.split('/');
-    
-    if (pathParts.length >= 3) {
-      const userLogin = pathParts[0];
-      const folderName = pathParts[1];
-      const fileName = pathParts[2];
-      const fileExtension = fileName.split('.').pop().toLowerCase();
-      
-      if (fileExtension === 'mp4') {
-        return `http://${wowzaHost}:1935/vod/_definst_/mp4:${userLogin}/${folderName}/${fileName}/playlist.m3u8`;
-      } else {
-        return `http://${wowzaHost}:1935/vod/_definst_/${userLogin}/${folderName}/${fileName}/playlist.m3u8`;
-      }
-    }
-    
-    return `http://${wowzaHost}:1935/vod/_definst_/${cleanPath}/playlist.m3u8`;
+    // Usar proxy do backend
+    return video.url.startsWith('http') ? video.url : `/content${video.url}`;
   };
 
   return (
