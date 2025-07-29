@@ -128,8 +128,9 @@
       // Fazer proxy da requisição para o servidor Wowza
       const fetch = require('node-fetch');
       
-      // Buscar credenciais do servidor Wowza do banco de dados
+      // Configurar autenticação para o Wowza
       let wowzaAuth = 'admin:FK38Ca2SuE6jvJXed97VMn'; // Credenciais padrão
+      let authHeader = '';
       
       try {
         const [authRows] = await db.execute(
@@ -140,11 +141,15 @@
         if (authRows.length > 0) {
           wowzaAuth = `admin:${authRows[0].senha_root}`;
         }
+        
+        // Criar header de autenticação Basic
+        authHeader = Buffer.from(wowzaAuth).toString('base64');
       } catch (authError) {
         console.warn('⚠️ Erro ao buscar credenciais do Wowza, usando padrão:', authError.message);
+        authHeader = Buffer.from(wowzaAuth).toString('base64');
       }
       
-      const authHeader = Buffer.from(wowzaAuth).toString('base64');
+      console.log(`🔐 Usando autenticação: ${wowzaAuth.split(':')[0]}:***`);
       
       const wowzaResponse = await fetch(wowzaUrl, {
         method: req.method,
@@ -153,19 +158,22 @@
           'User-Agent': 'Streaming-System/1.0',
           'Authorization': `Basic ${authHeader}`,
           'Accept': '*/*',
-          'Connection': 'keep-alive'
+          'Connection': 'keep-alive',
+          'Cache-Control': 'no-cache'
         },
         timeout: 30000
       });
       
       if (!wowzaResponse.ok) {
-        console.log(`❌ Erro do Wowza (${wowzaResponse.status}): ${wowzaResponse.statusText}`);
+        console.log(`❌ Erro do Wowza (${wowzaResponse.status}): ${wowzaResponse.statusText} para URL: ${wowzaUrl}`);
         
-        // Tentar URLs alternativas
+        // Tentar URLs alternativas sem autenticação primeiro
         const alternativeUrls = [
-          `http://${wowzaHost}:1935/vod${requestPath}`,
-          `http://${wowzaHost}:1935/live${requestPath}`,
-          `http://${wowzaHost}:1935/samhost${requestPath}`
+          `http://${wowzaHost}:1935/vod${requestPath}`, // VOD direto
+          `http://${wowzaHost}:1935/live${requestPath}`, // Live direto
+          `http://${wowzaHost}:1935/samhost${requestPath}`, // Aplicação samhost
+          `http://${wowzaHost}:8080/content${requestPath}`, // Servidor HTTP direto
+          `http://${wowzaHost}/content${requestPath}` // Servidor web padrão
         ];
         
         for (const altUrl of alternativeUrls) {
@@ -176,7 +184,11 @@
               method: req.method,
               headers: {
                 'Range': req.headers.range || '',
-                'User-Agent': 'Streaming-System/1.0'
+                'User-Agent': 'Streaming-System/1.0',
+                'Accept': '*/*',
+                'Cache-Control': 'no-cache',
+                // Tentar com e sem autenticação
+                ...(altUrl.includes(':1935') ? { 'Authorization': `Basic ${authHeader}` } : {})
               },
               timeout: 10000
             });
@@ -184,13 +196,12 @@
             if (altResponse.ok) {
               console.log(`✅ URL alternativa funcionou: ${altUrl}`);
               
-                  'User-Agent': 'Streaming-System/1.0',
-                  'Authorization': `Basic ${authHeader}`,
-                  'Accept': '*/*'
+              // Copiar headers da resposta
               altResponse.headers.forEach((value, key) => {
                 res.setHeader(key, value);
               });
               
+              // Fazer pipe do stream
               altResponse.body.pipe(res);
               return;
             }
@@ -199,12 +210,63 @@
           }
         }
         
+        // Se todas as tentativas falharam, tentar acesso direto ao sistema de arquivos
+        console.log(`🔄 Tentando acesso direto ao arquivo...`);
+        try {
+          const fs = require('fs');
+          const path = require('path');
+          
+          // Construir caminho local do arquivo
+          const localPath = `/usr/local/WowzaStreamingEngine/content${requestPath}`;
+          
+          if (fs.existsSync(localPath)) {
+            console.log(`✅ Arquivo encontrado localmente: ${localPath}`);
+            
+            const stat = fs.statSync(localPath);
+            const fileSize = stat.size;
+            
+            // Configurar headers para streaming
+            res.setHeader('Content-Length', fileSize);
+            res.setHeader('Content-Type', 'video/mp4');
+            res.setHeader('Accept-Ranges', 'bytes');
+            res.setHeader('Cache-Control', 'public, max-age=3600');
+            
+            // Suporte a Range requests
+            const range = req.headers.range;
+            if (range) {
+              const parts = range.replace(/bytes=/, "").split("-");
+              const start = parseInt(parts[0], 10);
+              const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+              const chunksize = (end - start) + 1;
+              
+              res.status(206);
+              res.setHeader('Content-Range', `bytes ${start}-${end}/${fileSize}`);
+              res.setHeader('Content-Length', chunksize);
+              
+              const stream = fs.createReadStream(localPath, { start, end });
+              stream.pipe(res);
+            } else {
+              const stream = fs.createReadStream(localPath);
+              stream.pipe(res);
+            }
+            return;
+          }
+        } catch (fsError) {
+          console.log(`❌ Acesso direto ao arquivo falhou: ${fsError.message}`);
+        }
+        
         return res.status(404).json({ 
           error: 'Vídeo não encontrado no servidor de streaming',
-          details: `Tentativas falharam para: ${wowzaUrl} (Status: ${wowzaResponse.status})`,
-          suggestions: 'Verifique se o arquivo existe no servidor Wowza e se as credenciais estão corretas',
+          details: `Todas as tentativas falharam. Status principal: ${wowzaResponse.status}`,
+          suggestions: [
+            'Verifique se o arquivo foi enviado corretamente para o servidor',
+            'Confirme se as credenciais do Wowza estão corretas',
+            'Verifique se o servidor Wowza está funcionando',
+            'Tente fazer upload do vídeo novamente'
+          ],
           wowzaHost: wowzaHost,
-          originalPath: requestPath
+          originalPath: requestPath,
+          attemptedUrls: [wowzaUrl, ...alternativeUrls]
         });
       }
       
@@ -221,7 +283,12 @@
       return res.status(500).json({ 
         error: 'Erro interno do servidor',
         details: error.message,
-        path: req.path
+        path: req.path,
+        suggestions: [
+          'Tente novamente em alguns segundos',
+          'Verifique sua conexão com a internet',
+          'Entre em contato com o suporte se o problema persistir'
+        ]
       });
     }
   });
