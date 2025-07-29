@@ -83,9 +83,10 @@ function ModalVideo({
       return video.url;
     }
     
-    // Usar proxy do backend para acessar vídeos
-    // O backend já tem a lógica para construir URLs corretas e fazer proxy para o Wowza
-    return `/content${video.url}`;
+    // Construir URL usando o proxy do backend
+    // Garantir que a URL comece com /content
+    const cleanUrl = video.url.startsWith('/') ? video.url : `/${video.url}`;
+    return `/content${cleanUrl}`;
   };
 
   return (
@@ -113,19 +114,37 @@ function ModalVideo({
               onError={(e) => {
                 console.error('Erro ao carregar vídeo:', e);
                 console.log('URL do vídeo:', getVideoUrl(video));
-                toast.error('Erro ao carregar o vídeo. Verifique se o arquivo existe.');
+                console.log('Dados do vídeo:', video);
+                toast.error(`Erro ao carregar o vídeo "${video.nome}". Tentando recarregar...`);
+                
+                // Tentar recarregar após 2 segundos
+                setTimeout(() => {
+                  const videoElement = e.target as HTMLVideoElement;
+                  if (videoElement) {
+                    videoElement.load();
+                  }
+                }, 2000);
               }}
               onLoadStart={() => {
                 console.log('Carregando vídeo:', getVideoUrl(video));
+                console.log('Dados do vídeo:', video);
+              }}
+              onLoadedData={() => {
+                console.log('✅ Vídeo carregado com sucesso:', getVideoUrl(video));
+              }}
+              onCanPlay={() => {
+                console.log('✅ Vídeo pronto para reprodução:', getVideoUrl(video));
               }}
             >
               Seu navegador não suporta o elemento de vídeo.
             </video>
             
-            {/* Debug info - remover em produção */}
+            {/* Debug info */}
             <div className="mt-2 p-2 bg-gray-100 text-xs text-gray-600">
               <p><strong>URL:</strong> {getVideoUrl(video)}</p>
               <p><strong>Arquivo:</strong> {video.url}</p>
+              <p><strong>ID:</strong> {video.id}</p>
+              <p><strong>Tamanho:</strong> {video.tamanho ? formatarTamanho(video.tamanho) : 'N/A'}</p>
             </div>
           </div>
         ) : (

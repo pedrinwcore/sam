@@ -128,15 +128,23 @@ class SSHManager {
 
                     // Criar diretório remoto se não existir
                     const remoteDir = path.dirname(remotePath);
+                    console.log(`📁 Criando diretório remoto: ${remoteDir}`);
+                    
                     sftp.mkdir(remoteDir, { mode: 0o755 }, (mkdirErr) => {
                         // Ignorar erro se diretório já existir
+                        if (mkdirErr && !mkdirErr.message.includes('exists')) {
+                            console.warn('⚠️ Aviso ao criar diretório:', mkdirErr.message);
+                        }
                         
+                        console.log(`📤 Iniciando upload: ${localPath} -> ${remotePath}`);
                         sftp.fastPut(localPath, remotePath, (uploadErr) => {
                             if (uploadErr) {
+                                console.error('❌ Erro no upload SSH:', uploadErr);
                                 reject(uploadErr);
                                 return;
                             }
 
+                            console.log(`✅ Upload concluído: ${remotePath}`);
                             // Definir permissões do arquivo
                             sftp.chmod(remotePath, 0o644, (chmodErr) => {
                                 if (chmodErr) {

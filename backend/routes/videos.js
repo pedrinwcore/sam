@@ -83,11 +83,8 @@ router.get('/', authMiddleware, async (req, res) => {
       if (video.url.startsWith('http')) {
         url = video.url;
       } else {
-        if (video.url.includes('mp4:')) {
-          url = video.url;
-        } else {
-          url = wowzaService.buildVideoUrl(userLogin, folderName, video.nome).hlsUrl;
-        }
+        // Sempre usar a URL relativa que será processada pelo proxy
+        url = video.url;
       }
       return {
         id: video.id,
@@ -150,10 +147,15 @@ router.post('/upload', authMiddleware, upload.single('video'), async (req, res) 
     await SSHManager.createUserFolder(serverId, userLogin, folderName);
 
     const remotePath = `/usr/local/WowzaStreamingEngine/content/${userLogin}/${folderName}/${req.file.filename}`;
+    
+    console.log(`📤 Enviando arquivo via SSH: ${req.file.path} -> ${remotePath}`);
     await SSHManager.uploadFile(serverId, req.file.path, remotePath);
+    console.log(`✅ Arquivo enviado com sucesso para: ${remotePath}`);
+    
     await fs.unlink(req.file.path);
 
     const relativePath = `/${userLogin}/${folderName}/${req.file.filename}`;
+    console.log(`💾 Salvando no banco com path: ${relativePath}`);
 
     const [result] = await db.execute(
       `INSERT INTO playlists_videos (
@@ -167,6 +169,8 @@ router.post('/upload', authMiddleware, upload.single('video'), async (req, res) 
       'UPDATE streamings SET espaco_usado = espaco_usado + ? WHERE codigo = ?',
       [spaceMB, folderId]
     );
+
+    console.log(`✅ Vídeo salvo no banco com ID: ${result.insertId}`);
 
     res.status(201).json({
       id: result.insertId,
