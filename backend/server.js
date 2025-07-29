@@ -127,7 +127,24 @@
       
       // Fazer proxy da requisição para o servidor Wowza
       const fetch = require('node-fetch');
-      const authHeader = Buffer.from('admin:FK38Ca2SuE6jvJXed97VMn').toString('base64');
+      
+      // Buscar credenciais do servidor Wowza do banco de dados
+      let wowzaAuth = 'admin:FK38Ca2SuE6jvJXed97VMn'; // Credenciais padrão
+      
+      try {
+        const [authRows] = await db.execute(
+          'SELECT senha_root FROM wowza_servers WHERE ip = ? LIMIT 1',
+          [wowzaHost]
+        );
+        
+        if (authRows.length > 0) {
+          wowzaAuth = `admin:${authRows[0].senha_root}`;
+        }
+      } catch (authError) {
+        console.warn('⚠️ Erro ao buscar credenciais do Wowza, usando padrão:', authError.message);
+      }
+      
+      const authHeader = Buffer.from(wowzaAuth).toString('base64');
       
       const wowzaResponse = await fetch(wowzaUrl, {
         method: req.method,
@@ -135,7 +152,8 @@
           'Range': req.headers.range || '',
           'User-Agent': 'Streaming-System/1.0',
           'Authorization': `Basic ${authHeader}`,
-          'Accept': '*/*'
+          'Accept': '*/*',
+          'Connection': 'keep-alive'
         },
         timeout: 30000
       });
@@ -166,7 +184,9 @@
             if (altResponse.ok) {
               console.log(`✅ URL alternativa funcionou: ${altUrl}`);
               
-              // Copiar headers da resposta
+                  'User-Agent': 'Streaming-System/1.0',
+                  'Authorization': `Basic ${authHeader}`,
+                  'Accept': '*/*'
               altResponse.headers.forEach((value, key) => {
                 res.setHeader(key, value);
               });
@@ -181,8 +201,10 @@
         
         return res.status(404).json({ 
           error: 'Vídeo não encontrado no servidor de streaming',
-          details: `Tentativas falharam para: ${wowzaUrl}`,
-          suggestions: 'Verifique se o arquivo existe no servidor Wowza'
+          details: `Tentativas falharam para: ${wowzaUrl} (Status: ${wowzaResponse.status})`,
+          suggestions: 'Verifique se o arquivo existe no servidor Wowza e se as credenciais estão corretas',
+          wowzaHost: wowzaHost,
+          originalPath: requestPath
         });
       }
       
@@ -196,7 +218,11 @@
       
     } catch (error) {
       console.error('❌ Erro no middleware de vídeo:', error);
-      return res.status(500).json({ error: 'Erro interno do servidor' });
+      return res.status(500).json({ 
+        error: 'Erro interno do servidor',
+        details: error.message,
+        path: req.path
+      });
     }
   });
   
